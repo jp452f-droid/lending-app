@@ -676,21 +676,149 @@ elif menu == "Post Payment":
                 col5.write("")
 
 elif menu == "Cash Ledger":
-    st.subheader("Cash Ledger")
-    st.write(f"**Cash on Hand:** ₱{get_cash_on_hand():,.2f}")
-
+    st.subheader("📒 Complete Cash Ledger")
+    
+    # Get current cash on hand
+    current_cash = get_cash_on_hand()
+    
+    # Summary metrics at the top
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Cash on Hand", f"₱{current_cash:,.2f}")
+    
+    # Get all ledger entries for calculations
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT entry_date, entry_type, amount, reference
+        SELECT entry_date, entry_type, amount, reference, entry_id
         FROM cash_ledger
-        ORDER BY entry_date DESC, entry_id DESC
+        ORDER BY entry_date ASC, entry_id ASC
     """)
     rows = cur.fetchall()
+    
+    # Calculate totals
+    cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'CASH_IN'")
+    total_cash_in = cur.fetchone()[0]
+    
+    cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'DISBURSEMENT'")
+    total_disbursements = abs(cur.fetchone()[0])  # Make positive for display
+    
+    cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'COLLECTION'")
+    total_collections = cur.fetchone()[0]
+    
     conn.close()
-
+    
+    # Summary section
+    with st.expander("📊 Ledger Summary", expanded=True):
+        sum_col1, sum_col2, sum_col3, sum_col4 = st.columns(4)
+        sum_col1.metric("Total Cash In", f"₱{total_cash_in:,.2f}")
+        sum_col2.metric("Total Disbursed", f"₱{total_disbursements:,.2f}")
+        sum_col3.metric("Total Collected", f"₱{total_collections:,.2f}")
+        sum_col4.metric("Net Flow", f"₱{total_cash_in + total_collections - total_disbursements:,.2f}")
+    
+    # Main ledger table
+    st.write("### 📋 Transaction History")
+    
     if rows:
-        for entry_date, entry_type, amount, reference in rows:
-            st.write(f"{entry_date} | {entry_type} | ₱{amount:,.2f} | {reference}")
+        # Create a nice table layout
+        ledger_data = []
+        running_balance = 0
+        
+        for entry_date, entry_type, amount, reference, entry_id in rows:
+            running_balance += amount
+            
+            # Format based on transaction type
+            if entry_type == "CASH_IN":
+                in_amount = amount
+                out_amount = 0
+                type_emoji = "💰"
+            elif entry_type == "COLLECTION":
+                in_amount = amount
+                out_amount = 0
+                type_emoji = "📥"
+            elif entry_type == "DISBURSEMENT":
+                in_amount = 0
+                out_amount = abs(amount)
+                type_emoji = "📤"
+            else:
+                in_amount = amount if amount > 0 else 0
+                out_amount = abs(amount) if amount < 0 else 0
+                type_emoji = "🔄"
+            
+            ledger_data.append({
+                "Date": entry_date,
+                "Type": f"{type_emoji} {entry_type}",
+                "Description": reference,
+                "In (₱)": f"₱{in_amount:,.2f}" if in_amount > 0 else "",
+                "Out (₱)": f"₱{out_amount:,.2f}" if out_amount > 0 else "",
+                "Balance (₱)": f"₱{running_balance:,.2f}"
+            })
+        
+        # Display as dataframe
+        import pandas as pd
+        df = pd.DataFrame(ledger_data)
+        st.dataframe(
+            df,
+            column_config={
+                "Date": st.column_config.TextColumn("Date", width="small"),
+                "Type": st.column_config.TextColumn("Type", width="small"),
+                "Description": st.column_config.TextColumn("Description", width="large"),
+                "In (₱)": st.column_config.TextColumn("In (₱)", width="small"),
+                "Out (₱)": st.column_config.TextColumn("Out (₱)", width="small"),
+                "Balance (₱)": st.column_config.TextColumn("Balance (₱)", width="small"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        # Show beginning and ending balance
+        st.caption(f"**Beginning Balance:** ₱0.00 | **Ending Balance:** ₱{running_balance:,.2f}")
+        
     else:
-        st.info("No cash entries yet.")
+        st.info("No cash entries yet. Add cash or create loans to see the ledger.")
+    
+    # Add quick filters
+    with st.expander("🔍 Filter Transactions"):
+        filter_type = st.multiselect(
+            "Transaction Type",
+            options=["CASH_IN", "COLLECTION", "DISBURSEMENT"],
+            default=[]
+        )
+        
+        if filter_type and rows:
+            filtered_data = [d for d in ledger_data if any(ft in d["Type"] for ft in filter_type)]
+            if filtered_data:
+                df_filtered = pd.DataFrame(filtered_data)
+                st.dataframe(df_filtered, hide_index=True, use_container_width=True)
+    
+    # Option to add cash directly from ledger
+    with st.expander("➕ Add Cash Entry"):
+        with st.form("add_cash_ledger"):
+            entry_date = st.date_input("Date", value=datetime.today())
+            entry_type = st.selectbox("Entry Type", ["CASH_IN", "COLLECTION", "DISBURSEMENT", "ADJUSTMENT"])
+            amount = st.number_input("Amount", min_value=0.01, step=100.0, 
+                                    help="Positive for inflows, negative will be handled automatically")
+            reference = st.text_input("Reference/Description")
+            
+            # For disbursements, make amount negative
+            if entry_type == "DISBURSEMENT":
+                st.caption("⚠️ Disbursements will be recorded as negative (cash out)")
+            
+            submitted = st.form_submit_button("Add Entry")
+            if submitted:
+                if amount <= 0:
+                    st.error("Please enter a positive amount")
+                else:
+                    # Adjust amount sign based on type
+                    final_amount = amount
+                    if entry_type == "DISBURSEMENT":
+                        final_amount = -amount
+                    
+                    add_cash_entry(
+                        entry_date.strftime("%Y-%m-%d"),
+                        entry_type,
+                        final_amount,
+                        reference
+                    )
+                    st.success("Entry added successfully!")
+                    st.rerun()
