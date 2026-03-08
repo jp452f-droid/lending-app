@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 from datetime import datetime, date
+import pandas as pd
 
 DB = "loans.db"
 
@@ -17,6 +18,8 @@ def setup_db():
     CREATE TABLE IF NOT EXISTS borrowers (
         borrower_id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_name TEXT NOT NULL UNIQUE,
+        phone TEXT,
+        address TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -29,7 +32,7 @@ def setup_db():
         term_months INTEGER NOT NULL,
         monthly_interest_rate REAL NOT NULL DEFAULT 0.15,
         total_due REAL NOT NULL,
-        start_date TEXT NOT NULL,
+        start_date TEXT,
         status TEXT DEFAULT 'active',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (borrower_id) REFERENCES borrowers (borrower_id)
@@ -40,7 +43,7 @@ def setup_db():
     CREATE TABLE IF NOT EXISTS payments (
         payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
         loan_id INTEGER NOT NULL,
-        due_date TEXT NOT NULL,
+        due_date TEXT,
         amount REAL NOT NULL,
         status TEXT NOT NULL DEFAULT 'Unpaid',
         paid_at TEXT,
@@ -59,6 +62,12 @@ def setup_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+
+    # Add paid_at column if old DB exists without it
+    cur.execute("PRAGMA table_info(payments)")
+    cols = [row[1] for row in cur.fetchall()]
+    if "paid_at" not in cols:
+        cur.execute("ALTER TABLE payments ADD COLUMN paid_at TEXT")
 
     conn.commit()
     conn.close()
@@ -96,7 +105,7 @@ def cash_entry_exists(entry_type, reference):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT 1
+        SELECT entry_id
         FROM cash_ledger
         WHERE entry_type = ? AND reference = ?
         LIMIT 1
@@ -225,6 +234,15 @@ def ensure_schedule_for_loan(loan_id, principal, term_months, start_date):
 
 
 def seed_current_data():
+    # Check if data already exists to prevent duplicates
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM borrowers")
+    if cur.fetchone()[0] > 5:  # If more than 5 borrowers exist, skip seeding
+        conn.close()
+        return
+    conn.close()
+    
     loans = [
         {
             "name": "Wychelle",
@@ -457,16 +475,20 @@ def fetch_payments_for_loan(loan_id):
     return rows
 
 
+# Initialize database
 setup_db()
 
+# App title
 st.title("Kelsey Lending")
 st.caption("Loan Management System")
 
+# Sidebar menu
 menu = st.sidebar.selectbox(
     "Menu",
     ["Dashboard", "Load Current Data", "Add Borrower / Loan", "View Loans", "Post Payment", "Cash Ledger"]
 )
 
+# Dashboard
 if menu == "Dashboard":
     total_principal, total_due, total_collected, outstanding = fetch_summary()
     due_today, due_7_days, due_30_days, upcoming_rows = fetch_upcoming_collections()
@@ -513,13 +535,16 @@ if menu == "Dashboard":
     else:
         st.info("No upcoming unpaid collections found.")
 
+# Load Current Data
 elif menu == "Load Current Data":
     st.subheader("Load your current ledger")
+    st.warning("⚠️ Only click this once! Loading multiple times will create duplicates.")
     if st.button("Load Sample Data"):
         seed_current_data()
         st.success("Sample data loaded.")
         st.rerun()
 
+# Add Borrower / Loan
 elif menu == "Add Borrower / Loan":
     st.subheader("Add new borrower and loan")
 
@@ -565,6 +590,7 @@ elif menu == "Add Borrower / Loan":
             st.success(f"Loan saved. Loan ID: {loan_id}")
             st.rerun()
 
+# View Loans
 elif menu == "View Loans":
     st.subheader("Loans")
     loans = fetch_loans()
@@ -593,6 +619,7 @@ elif menu == "View Loans":
                 else:
                     st.write("No payment schedule yet.")
 
+# Post Payment
 elif menu == "Post Payment":
     st.subheader("Post Payment")
 
@@ -675,6 +702,9 @@ elif menu == "Post Payment":
             else:
                 col5.write("")
 
+# ============================================
+# ENHANCED CASH LEDGER SECTION
+# ============================================
 elif menu == "Cash Ledger":
     st.subheader("📒 Complete Cash Ledger")
     
@@ -686,7 +716,7 @@ elif menu == "Cash Ledger":
     with col1:
         st.metric("Cash on Hand", f"₱{current_cash:,.2f}")
     
-    # Get all ledger entries for calculations
+    # Get all ledger entries
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -701,7 +731,7 @@ elif menu == "Cash Ledger":
     total_cash_in = cur.fetchone()[0]
     
     cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'DISBURSEMENT'")
-    total_disbursements = abs(cur.fetchone()[0])  # Make positive for display
+    total_disbursements = abs(cur.fetchone()[0]) if cur.fetchone()[0] else 0
     
     cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'COLLECTION'")
     total_collections = cur.fetchone()[0]
@@ -720,7 +750,7 @@ elif menu == "Cash Ledger":
     st.write("### 📋 Transaction History")
     
     if rows:
-        # Create a nice table layout
+        # Create ledger data with running balance
         ledger_data = []
         running_balance = 0
         
@@ -754,71 +784,104 @@ elif menu == "Cash Ledger":
                 "Balance (₱)": f"₱{running_balance:,.2f}"
             })
         
-        # Display as dataframe
-        import pandas as pd
+        # Display as dataframe with proper column widths
         df = pd.DataFrame(ledger_data)
+        
+        # Use columns to control layout
+        col_config = {
+            "Date": st.column_config.TextColumn("Date", width=100),
+            "Type": st.column_config.TextColumn("Type", width=100),
+            "Description": st.column_config.TextColumn("Description", width=300),
+            "In (₱)": st.column_config.TextColumn("In (₱)", width=100),
+            "Out (₱)": st.column_config.TextColumn("Out (₱)", width=100),
+            "Balance (₱)": st.column_config.TextColumn("Balance (₱)", width=120),
+        }
+        
         st.dataframe(
             df,
-            column_config={
-                "Date": st.column_config.TextColumn("Date", width="small"),
-                "Type": st.column_config.TextColumn("Type", width="small"),
-                "Description": st.column_config.TextColumn("Description", width="large"),
-                "In (₱)": st.column_config.TextColumn("In (₱)", width="small"),
-                "Out (₱)": st.column_config.TextColumn("Out (₱)", width="small"),
-                "Balance (₱)": st.column_config.TextColumn("Balance (₱)", width="small"),
-            },
+            column_config=col_config,
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            height=400
         )
         
         # Show beginning and ending balance
         st.caption(f"**Beginning Balance:** ₱0.00 | **Ending Balance:** ₱{running_balance:,.2f}")
         
+        # Search box
+        search = st.text_input("🔍 Search transactions", placeholder="Type to filter by description...")
+        if search:
+            filtered = [d for d in ledger_data if search.lower() in d["Description"].lower()]
+            if filtered:
+                st.write(f"Found {len(filtered)} matching transactions:")
+                st.dataframe(pd.DataFrame(filtered), hide_index=True, use_container_width=True)
+        
     else:
         st.info("No cash entries yet. Add cash or create loans to see the ledger.")
     
-    # Add quick filters
-    with st.expander("🔍 Filter Transactions"):
-        filter_type = st.multiselect(
-            "Transaction Type",
-            options=["CASH_IN", "COLLECTION", "DISBURSEMENT"],
-            default=[]
-        )
-        
-        if filter_type and rows:
-            filtered_data = [d for d in ledger_data if any(ft in d["Type"] for ft in filter_type)]
-            if filtered_data:
-                df_filtered = pd.DataFrame(filtered_data)
-                st.dataframe(df_filtered, hide_index=True, use_container_width=True)
+    # Separator
+    st.markdown("---")
     
-    # Option to add cash directly from ledger
-    with st.expander("➕ Add Cash Entry"):
-        with st.form("add_cash_ledger"):
-            entry_date = st.date_input("Date", value=datetime.today())
-            entry_type = st.selectbox("Entry Type", ["CASH_IN", "COLLECTION", "DISBURSEMENT", "ADJUSTMENT"])
-            amount = st.number_input("Amount", min_value=0.01, step=100.0, 
-                                    help="Positive for inflows, negative will be handled automatically")
-            reference = st.text_input("Reference/Description")
+    # ============================================
+    # IMPROVED ADD CASH SECTION
+    # ============================================
+    st.subheader("➕ Record New Transaction")
+    
+    with st.form("add_cash_ledger", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            entry_date = st.date_input("Transaction Date", value=datetime.today())
+            entry_type = st.selectbox(
+                "Transaction Type",
+                options=[
+                    "CASH_IN - Add personal money to business",
+                    "COLLECTION - Payment received from borrower", 
+                    "DISBURSEMENT - New loan given out",
+                    "ADJUSTMENT - Manual correction"
+                ]
+            )
+        
+        with col2:
+            amount = st.number_input("Amount (₱)", min_value=0.01, step=100.0, format="%.2f")
+            reference = st.text_input("Description / Reference", placeholder="e.g., Initial capital, Payment for...")
+        
+        # Show preview of impact
+        if entry_type.startswith("DISBURSEMENT"):
+            st.warning(f"⚠️ This will **deduct ₱{amount:,.2f}** from your cash on hand")
+            final_amount = -amount
+            type_code = "DISBURSEMENT"
+        elif entry_type.startswith("CASH_IN"):
+            st.success(f"✅ This will **add ₱{amount:,.2f}** to your cash on hand")
+            final_amount = amount
+            type_code = "CASH_IN"
+        elif entry_type.startswith("COLLECTION"):
+            st.success(f"✅ This will **add ₱{amount:,.2f}** to your cash on hand")
+            final_amount = amount
+            type_code = "COLLECTION"
+        else:
+            direction = st.radio("Direction:", ["Add to cash (Inflow)", "Deduct from cash (Outflow)"], horizontal=True)
+            if direction == "Add to cash (Inflow)":
+                final_amount = amount
+            else:
+                final_amount = -amount
+            type_code = "ADJUSTMENT"
+        
+        submitted = st.form_submit_button("💾 Record Transaction", use_container_width=True)
+        
+        if submitted:
+            if not reference:
+                reference = "No description"
             
-            # For disbursements, make amount negative
-            if entry_type == "DISBURSEMENT":
-                st.caption("⚠️ Disbursements will be recorded as negative (cash out)")
+            # Clean up type code
+            clean_type = type_code
             
-            submitted = st.form_submit_button("Add Entry")
-            if submitted:
-                if amount <= 0:
-                    st.error("Please enter a positive amount")
-                else:
-                    # Adjust amount sign based on type
-                    final_amount = amount
-                    if entry_type == "DISBURSEMENT":
-                        final_amount = -amount
-                    
-                    add_cash_entry(
-                        entry_date.strftime("%Y-%m-%d"),
-                        entry_type,
-                        final_amount,
-                        reference
-                    )
-                    st.success("Entry added successfully!")
-                    st.rerun()
+            add_cash_entry(
+                entry_date.strftime("%Y-%m-%d"),
+                clean_type,
+                final_amount,
+                reference
+            )
+            new_cash = get_cash_on_hand() + final_amount
+            st.success(f"✅ Transaction recorded! New cash on hand: ₱{new_cash:,.2f}")
+            st.rerun()
