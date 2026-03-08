@@ -506,58 +506,58 @@ if menu == "Dashboard":
     b1.metric("Collected", f"₱{total_collected:,.2f}")
     b2.metric("Outstanding", f"₱{outstanding:,.2f}")
 
-# Get upcoming collections with specific dates
-conn = get_conn()
-cur = conn.cursor()
-cur.execute("""
-    SELECT 
-        p.due_date,
-        GROUP_CONCAT(b.full_name || ' (₱' || printf('%,.2f', p.amount) || ')', ', ') as borrowers,
-        SUM(p.amount) as total
-    FROM payments p
-    JOIN loans l ON p.loan_id = l.loan_id
-    JOIN borrowers b ON l.borrower_id = b.borrower_id
-    WHERE p.status != 'Paid' 
-        AND p.due_date >= date('now')
-    GROUP BY p.due_date
-    ORDER BY p.due_date ASC
-    LIMIT 4
-""")
-next_collections = cur.fetchall()
-conn.close()
+    # Get upcoming collections with specific dates
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT 
+            p.due_date,
+            GROUP_CONCAT(b.full_name || ' (₱' || printf('%,.2f', p.amount) || ')', ', ') as borrowers,
+            SUM(p.amount) as total
+        FROM payments p
+        JOIN loans l ON p.loan_id = l.loan_id
+        JOIN borrowers b ON l.borrower_id = b.borrower_id
+        WHERE p.status != 'Paid' 
+            AND p.due_date >= date('now')
+        GROUP BY p.due_date
+        ORDER BY p.due_date ASC
+        LIMIT 4
+    """)
+    next_collections = cur.fetchall()
+    conn.close()
 
-st.subheader("📅 Upcoming Collection Dates")
+    st.subheader("📅 Upcoming Collection Dates")
 
-if next_collections:
-    # Create columns for each upcoming date
-    cols = st.columns(len(next_collections))
-    
-    for i, (due_date, borrowers, total) in enumerate(next_collections):
-        # Parse the date
-        due_obj = datetime.strptime(due_date, "%Y-%m-%d").date()
-        today = date.today()
-        days_away = (due_obj - today).days
+    if next_collections:
+        # Create columns for each upcoming date
+        cols = st.columns(len(next_collections))
         
-        # Format the display
-        with cols[i]:
-            # Date header with days away
-            if days_away == 0:
-                date_label = "🔴 TODAY"
-            elif days_away == 1:
-                date_label = "⚠️ TOMORROW"
-            else:
-                date_label = f"📆 {due_obj.strftime('%b %d')} (in {days_away} days)"
+        for i, (due_date, borrowers, total) in enumerate(next_collections):
+            # Parse the date
+            due_obj = datetime.strptime(due_date, "%Y-%m-%d").date()
+            today = date.today()
+            days_away = (due_obj - today).days
             
-            st.markdown(f"**{date_label}**")
-            st.markdown(f"### ₱{total:,.2f}")
-            
-            # Show list of borrowers
-            borrower_list = borrowers.split(', ')
-            with st.expander(f"View {len(borrower_list)} borrowers"):
-                for borrower in borrower_list:
-                    st.write(f"• {borrower}")
-else:
-    st.info("No upcoming collections scheduled")
+            # Format the display
+            with cols[i]:
+                # Date header with days away
+                if days_away == 0:
+                    date_label = "🔴 TODAY"
+                elif days_away == 1:
+                    date_label = "⚠️ TOMORROW"
+                else:
+                    date_label = f"📆 {due_obj.strftime('%b %d')} (in {days_away} days)"
+                
+                st.markdown(f"**{date_label}**")
+                st.markdown(f"### ₱{total:,.2f}")
+                
+                # Show list of borrowers
+                borrower_list = borrowers.split(', ')
+                with st.expander(f"View {len(borrower_list)} borrowers"):
+                    for borrower in borrower_list:
+                        st.write(f"• {borrower}")
+    else:
+        st.info("No upcoming collections scheduled")
 
     st.write(f"**Available budget for new loaners:** ₱{cash_on_hand:,.2f}")
 
@@ -574,23 +574,6 @@ else:
                 add_cash_entry(cash_date.strftime("%Y-%m-%d"), "CASH_IN", cash_amount, ref)
                 st.success("Cash added.")
                 st.rerun()
-
-    st.write("### Upcoming Schedule")
-    if upcoming_rows:
-        for due_date, full_name, amount in upcoming_rows:
-            st.write(f"{due_date} | {full_name} | ₱{amount:,.2f}")
-    else:
-        st.info("No upcoming unpaid collections found.")
-
-# Load Current Data
-elif menu == "Load Current Data":
-    st.subheader("Load your current ledger")
-    st.warning("⚠️ Only click this once! Loading multiple times will create duplicates.")
-    if st.button("Load Sample Data"):
-        seed_current_data()
-        st.success("Sample data loaded.")
-        st.rerun()
-
 # Add Borrower / Loan
 elif menu == "Add Borrower / Loan":
     st.subheader("Add new borrower and loan")
