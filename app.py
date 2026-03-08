@@ -703,7 +703,7 @@ elif menu == "Post Payment":
                 col5.write("")
 
 # ============================================
-# ENHANCED CASH LEDGER SECTION
+# ENHANCED CASH LEDGER SECTION - FIXED
 # ============================================
 elif menu == "Cash Ledger":
     st.subheader("📒 Complete Cash Ledger")
@@ -726,13 +726,13 @@ elif menu == "Cash Ledger":
     """)
     rows = cur.fetchall()
     
-    # Calculate totals
+    # Calculate totals - FIXED: No duplicate calculations
+    cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'CASH_IN'")
+    total_cash_in = cur.fetchone()[0]
+    
     cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'DISBURSEMENT'")
     disbursement_result = cur.fetchone()[0]
     total_disbursements = abs(disbursement_result)
-    
-    cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'DISBURSEMENT'")
-    total_disbursements = abs(cur.fetchone()[0]) if cur.fetchone()[0] else 0
     
     cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'COLLECTION'")
     total_collections = cur.fetchone()[0]
@@ -745,7 +745,7 @@ elif menu == "Cash Ledger":
         sum_col1.metric("Total Cash In", f"₱{total_cash_in:,.2f}")
         sum_col2.metric("Total Disbursed", f"₱{total_disbursements:,.2f}")
         sum_col3.metric("Total Collected", f"₱{total_collections:,.2f}")
-        sum_col4.metric("Net Flow", f"₱{total_cash_in + total_collections - total_disbursements:,.2f}")
+        sum_col4.metric("Net Flow", f"₱{current_cash:,.2f}")
     
     # Main ledger table
     st.write("### 📋 Transaction History")
@@ -883,6 +883,5 @@ elif menu == "Cash Ledger":
                 final_amount,
                 reference
             )
-            new_cash = get_cash_on_hand() + final_amount
-            st.success(f"✅ Transaction recorded! New cash on hand: ₱{new_cash:,.2f}")
+            st.success(f"✅ Transaction recorded!")
             st.rerun()
