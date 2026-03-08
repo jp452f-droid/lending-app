@@ -727,8 +727,9 @@ elif menu == "Cash Ledger":
     rows = cur.fetchall()
     
     # Calculate totals
-    cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'CASH_IN'")
-    total_cash_in = cur.fetchone()[0]
+    cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'DISBURSEMENT'")
+    disbursement_result = cur.fetchone()[0]
+    total_disbursements = abs(disbursement_result)
     
     cur.execute("SELECT COALESCE(SUM(amount), 0) FROM cash_ledger WHERE entry_type = 'DISBURSEMENT'")
     total_disbursements = abs(cur.fetchone()[0]) if cur.fetchone()[0] else 0
